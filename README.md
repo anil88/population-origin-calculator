@@ -36,3 +36,5 @@ ComparisonSmallestBiggest.jpeg
 PercentOfNonAustrian.jpeg
 
 PopulationOriginTotal.jpeg
+
+[![DOI](https://zenodo.org/badge/93341509.svg)](https://zenodo.org/badge/latestdoi/93341509)
