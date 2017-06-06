@@ -12,23 +12,27 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.net.UnknownHostException;
+import java.util.Stack;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartUtilities;
 import org.jfree.chart.JFreeChart;
+import org.jfree.chart.plot.PlotOrientation;
+import org.jfree.data.category.DefaultCategoryDataset;
 import org.jfree.data.general.DefaultPieDataset;
 import org.jfree.data.general.PieDataset;
 
 public class PopulationCalculator {
 
+    private static DefaultCategoryDataset relationDataset = new DefaultCategoryDataset();
     private final String COUNTRY_OF_ORIGIN_EU = "COUNTRY_OF_ORIGIN_EU";
     private final String COUNTRY_OF_ORIGIN_FORMER_YUGOSLAVIA = "COUNTRY_OF_ORIGIN_FORMER_YUGOSLAVIA";
     private final String COUNTRY_OF_ORIGIN_OTHERS = "COUNTRY_OF_ORIGIN_OTHERS";
     private final String COUNTRY_OF_ORIGIN_TURKEY = "COUNTRY_OF_ORIGIN_TURKEY";
     private final String COUNTRY_OF_ORIGIN_AUSTRIA = "COUNTRY_OF_ORIGIN_AUSTRIA";
+    private final String COUNTRY_OF_ORIGIN_TOTAL = "COUNTRY_OF_ORIGIN_TOTAL";
     private DBCollection collection;
     private MongoClient mongoClient;
     private DB db;
-
 
     public PopulationCalculator(String mongohost, int mongoPort, String mongoDB, String mongoCollection) throws UnknownHostException {
         mongoClient = new MongoClient(mongohost, mongoPort);
@@ -40,7 +44,9 @@ public class PopulationCalculator {
         if (args.length == 0) {
             PopulationCalculator populationCalculator = new PopulationCalculator("localhost", 27017, "population", "origin");
             populationCalculator.createTotalOriginData();
-            populationCalculator.createTotalOriginTurkeyData();
+            populationCalculator.createOriginOfTenBiggestAndSmallestCities();
+            populationCalculator.lineChart();
+            populationCalculator.createOriginChartOfAllData();
         } else if (args[0].equals("-modifyCSV")) {
             try {
                 modifyCSVFile(args[1]);
@@ -49,21 +55,14 @@ public class PopulationCalculator {
             }
         } else if (args[0].equals("-calculateCharts")) {
             String host = args[1];
-            int port = Integer.parseInt( args[2]);
+            int port = Integer.parseInt(args[2]);
             String db = args[3];
             String collection = args[4];
             PopulationCalculator populationCalculator = new PopulationCalculator(host, port, db, collection);
             populationCalculator.createTotalOriginData();
-            populationCalculator.createTotalOriginTurkeyData();
-        } else if (args[0].equals("-help")) {
-            System.console().printf("##########################################");
-            System.out.println();
-            System.out.println("Commands:");
-            System.out.println("-modifyCSV          path to csv file. Modifies the csv in order to make it readable for MongoDB");
-            System.out.println("-calculateCharts    calculates charts for the data of the MongoDB collection");
-            System.out.println("Parameter for calculation: mongo-host mongo-port mongo-db mongo-collection");
-            System.out.println();
-            System.out.println("Example: -calculateCharts localhost 27017 population origin");
+            populationCalculator.createOriginOfTenBiggestAndSmallestCities();
+            populationCalculator.lineChart();
+            populationCalculator.createOriginChartOfAllData();
         } else {
             System.out.println("##########################################");
             System.out.println("");
@@ -83,6 +82,24 @@ public class PopulationCalculator {
         writer.close();
     }
 
+    public static void lineChart() {
+        JFreeChart lineChart = ChartFactory.createLineChart(
+                "Comparison Smallest and Biggest Cities",
+                "People", "Percent of non Austrian [%]",
+                relationDataset,
+                PlotOrientation.VERTICAL,
+                true, true, false);
+
+        File pieChart = new File("ComparisonSmallestBiggest.jpeg");
+        int width = 1400;   /* Width of the image */
+        int height = 800;
+        try {
+            ChartUtilities.saveChartAsJPEG(pieChart, lineChart, width, height);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
     public void createTotalOriginData() {
         DefaultPieDataset dataset = new DefaultPieDataset();
         long turkey = 0;
@@ -90,6 +107,7 @@ public class PopulationCalculator {
         long others = 0;
         long yugo = 0;
         long austria = 0;
+        long total = 0;
         BasicDBObject fields = new BasicDBObject();
         fields.put("YEAR", 2015);
 
@@ -101,6 +119,7 @@ public class PopulationCalculator {
             turkey += obj.getInt(COUNTRY_OF_ORIGIN_TURKEY);
             others += obj.getInt(COUNTRY_OF_ORIGIN_OTHERS);
             austria += obj.getInt(COUNTRY_OF_ORIGIN_AUSTRIA);
+            total += obj.getInt(COUNTRY_OF_ORIGIN_TOTAL);
         }
 
         dataset.setValue("EU: " + eu, eu);
@@ -108,39 +127,94 @@ public class PopulationCalculator {
         dataset.setValue("Turkey: " + turkey, turkey);
         dataset.setValue("Others: " + others, others);
         dataset.setValue("Austria: " + austria, austria);
+
         printChart("PopulationOriginTotal", dataset);
     }
 
-    public void createTotalOriginTurkeyData() {
-        DefaultPieDataset dataset = new DefaultPieDataset();
-        BasicDBObject fields = new BasicDBObject();
-        fields.put("YEAR", 2015);
-
-        DBCursor cursor = collection.find(fields).sort(new BasicDBObject("COUNTRY_OF_ORIGIN_TOTAL", -1)).limit(10);
-        while (cursor.hasNext()) {
-            BasicDBObject obj = (BasicDBObject) cursor.next();
-            createTotalOriginForCity(obj);
-            int amount = obj.getInt("COUNTRY_OF_ORIGIN_TOTAL");
-            dataset.setValue(obj.getString("LAU2_NAME") + ": " + amount, amount);
-        }
-
-        printChart("10BiggestCities", dataset);
+    private double calculateNotAustrianRelation(long austrian, long notAustrian) {
+        long sum = austrian + notAustrian;
+        double onPercent = sum / 100;
+        return notAustrian / onPercent;
     }
 
-    private void createTotalOriginForCity(BasicDBObject basicDBObject) {
+    public void createOriginChartOfAllData() {
+        DefaultCategoryDataset relationAllDataset = new DefaultCategoryDataset();
+        BasicDBObject fields = new BasicDBObject();
+        fields.put("YEAR", 2015);
+        DBCursor cursor = collection.find(fields).sort(new BasicDBObject(COUNTRY_OF_ORIGIN_TOTAL, 1));
+        while (cursor.hasNext()) {
+            BasicDBObject obj = (BasicDBObject) cursor.next();
+            DefaultPieDataset dataset = new DefaultPieDataset();
+            int eu = obj.getInt(COUNTRY_OF_ORIGIN_EU);
+            int turkey = obj.getInt(COUNTRY_OF_ORIGIN_TURKEY);
+            int others = obj.getInt(COUNTRY_OF_ORIGIN_OTHERS);
+            int yugo = obj.getInt(COUNTRY_OF_ORIGIN_FORMER_YUGOSLAVIA);
+            int austria = obj.getInt(COUNTRY_OF_ORIGIN_AUSTRIA);
+            int total = obj.getInt(COUNTRY_OF_ORIGIN_TOTAL);
+            dataset.setValue("EU: " + eu, eu);
+            dataset.setValue("Former Yugoslavien: " + yugo, yugo);
+            dataset.setValue("Turkey: " + turkey, turkey);
+            dataset.setValue("Others: " + others, others);
+            dataset.setValue("Austria: " + austria, austria);
+            double relationResult = calculateNotAustrianRelation(austria , (eu+ yugo + turkey + others));
+            relationAllDataset.addValue(relationResult, "All", " " + total);
+
+        }
+
+        JFreeChart lineChart = ChartFactory.createLineChart(
+                "Percent of non Austrian",
+                "People", "Percent of non Austrian [%]",
+                relationAllDataset,
+                PlotOrientation.VERTICAL,
+                true, true, false);
+
+        File pieChart = new File("PercentOfNonAustrian.jpeg");
+        int width = 1400;   /* Width of the image */
+        int height = 800;
+        try {
+            ChartUtilities.saveChartAsJPEG(pieChart, lineChart, width, height);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+    public void createOriginOfTenBiggestAndSmallestCities() {
+        BasicDBObject fields = new BasicDBObject();
+        fields.put("YEAR", 2015);
+        DBCursor cursorSmallest = collection.find(fields).sort(new BasicDBObject(COUNTRY_OF_ORIGIN_TOTAL, 1)).limit(10);
+        DBCursor cursorBiggest = collection.find(fields).sort(new BasicDBObject(COUNTRY_OF_ORIGIN_TOTAL, -1)).limit(10);
+
+        while (cursorSmallest.hasNext()) {
+            BasicDBObject obj = (BasicDBObject) cursorSmallest.next();
+            createTotalOriginForCity(obj, "SMALLEST_TEN");
+        }
+
+        Stack<BasicDBObject> revertBiggest = new Stack<BasicDBObject>();
+        while (cursorBiggest.hasNext()) {
+            revertBiggest.push((BasicDBObject) cursorBiggest.next());
+        }
+
+        while (!revertBiggest.isEmpty()) {
+            BasicDBObject obj = revertBiggest.pop();
+            createTotalOriginForCity(obj, "BIGGEST_TEN");
+        }
+    }
+
+    private void createTotalOriginForCity(BasicDBObject basicDBObject, String smallOrBig) {
         DefaultPieDataset dataset = new DefaultPieDataset();
         int eu = basicDBObject.getInt(COUNTRY_OF_ORIGIN_EU);
         int turkey = basicDBObject.getInt(COUNTRY_OF_ORIGIN_TURKEY);
         int others = basicDBObject.getInt(COUNTRY_OF_ORIGIN_OTHERS);
         int yugo = basicDBObject.getInt(COUNTRY_OF_ORIGIN_FORMER_YUGOSLAVIA);
         int austria = basicDBObject.getInt(COUNTRY_OF_ORIGIN_AUSTRIA);
-
+        int total = basicDBObject.getInt(COUNTRY_OF_ORIGIN_TOTAL);
         dataset.setValue("EU: " + eu, eu);
         dataset.setValue("Former Yugoslavien: " + yugo, yugo);
         dataset.setValue("Turkey: " + turkey, turkey);
         dataset.setValue("Others: " + others, others);
         dataset.setValue("Austria: " + austria, austria);
-        printChart(basicDBObject.getString("LAU2_NAME"), dataset);
+        double relationResult = calculateNotAustrianRelation(austria , (eu+ yugo + turkey + others));
+        relationDataset.addValue(relationResult, smallOrBig, " " + total);
+
     }
 
     private void printChart(String title, PieDataset dataset) {
